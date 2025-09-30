@@ -1,59 +1,109 @@
 import streamlit as st
 import yfinance as yf
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
+import numpy as np
+from transformers import pipeline
 from tensorflow.keras.models import load_model
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
+from sklearn.preprocessing import MinMaxScaler
+import os
 
-# ---------------------------
-# Load Model + FinBERT
-# ---------------------------
-model = load_model("marketpulse_model.keras")
-
-finbert = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
-tokenizer = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-
-def analyze_sentiment(text):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
-    outputs = finbert(**inputs)
-    scores = torch.nn.functional.softmax(outputs.logits, dim=1)
-    labels = ["Negative", "Neutral", "Positive"]
-    return dict(zip(labels, scores[0].detach().numpy()))
-
-# ---------------------------
-# Streamlit UI
-# ---------------------------
+# ------------------------------
+# Title
+# ------------------------------
 st.title("📈 MarketPulse: AI-Powered Stock Sentiment Analyzer")
 
-ticker = st.text_input("Enter Stock Ticker (e.g., AAPL, TSLA)", "AAPL")
-if st.button("Analyze"):
-    df = yf.download(ticker, period="1y", interval="1d")
-    data = df[['Close']]
-    st.line_chart(data)
+# ------------------------------
+# Sidebar Inputs
+# ------------------------------
+st.sidebar.header("User Input")
+ticker = st.sidebar.text_input("Enter Stock Ticker (e.g., AAPL, TSLA)", "AAPL")
+start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2020-01-01"))
+end_date = st.sidebar.date_input("End Date", pd.to_datetime("2024-01-01"))
 
-    # LSTM Prediction
-    scaler = MinMaxScaler(feature_range=(0,1))
-    scaled = scaler.fit_transform(data)
+# ------------------------------
+# Load Stock Price Data
+# ------------------------------
+st.subheader(f"Stock Price Data for {ticker}")
+data = yf.download(ticker, start=start_date, end=end_date)
 
-    def create_dataset(dataset, time_step=60):
-        X = []
-        for i in range(len(dataset)-time_step-1):
-            X.append(dataset[i:(i+time_step), 0])
-        return np.array(X)
+if data.empty:
+    st.error("❌ No stock data found. Please try another ticker or date range.")
+    st.stop()
 
-    last_60 = scaled[-60:]
-    X_input = last_60.reshape(1, 60, 1)
-    pred = model.predict(X_input)
-    pred_price = scaler.inverse_transform(pred)[0][0]
+st.write("📊 Data preview:", data.head())
 
-    st.subheader(f"🔮 Predicted Next Close Price: ${pred_price:.2f}")
+# ------------------------------
+# Preprocess Data for LSTM
+# ------------------------------
+df_close = data[["Close"]].reset_index()
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled_data = scaler.fit_transform(df_close["Close"].values.reshape(-1, 1))
 
-    # Sentiment Input
-    st.subheader("📰 Financial News Sentiment")
-    news = st.text_area("Paste recent financial news about the company:")
-    if st.button("Analyze Sentiment"):
-        result = analyze_sentiment(news)
-        st.write(result)
+# ------------------------------
+# Load LSTM Model
+# ------------------------------
+MODEL_PATH = "marketpulse_model.keras"
+if os.path.exists(MODEL_PATH):
+    model = load_model(MODEL_PATH)
+else:
+    st.warning("⚠️ Model file not found. Using dummy forecast instead.")
+    model = None
+
+# Forecast next value (dummy if model missing)
+if model:
+    last_60 = scaled_data[-60:].reshape(1, 60, 1)
+    predicted_price = model.predict(last_60)
+    predicted_price = scaler.inverse_transform(predicted_price)[0][0]
+else:
+    predicted_price = float(df_close["Close"].iloc[-1]) * (1 + np.random.uniform(-0.02, 0.02))
+
+st.metric("📌 Predicted Next Closing Price", f"${predicted_price:.2f}")
+
+# ------------------------------
+# Sentiment Analysis with FinBERT
+# ------------------------------
+st.subheader("📑 Sentiment Analysis (FinBERT)")
+
+# Example headlines (in practice, fetch from a news API)
+headlines = [
+    "Federal Reserve raises interest rates amid inflation concerns",
+    f"{ticker} reports strong quarterly earnings beating estimates",
+    f"{ticker} stock downgraded by analysts due to market volatility"
+]
+
+classifier = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+
+sentiments = classifier(headlines)
+sentiment_df = pd.DataFrame(sentiments)
+sentiment_df["headline"] = headlines
+sentiment_df = sentiment_df[["headline", "label", "score"]]
+
+st.write(sentiment_df)
+
+# Convert sentiment labels to numeric values
+sentiment_map = {"positive": 1, "neutral": 0, "negative": -1}
+sentiment_df["sentiment_value"] = sentiment_df["label"].map(sentiment_map)
+avg_sentiment = sentiment_df["sentiment_value"].mean()
+
+# ------------------------------
+# Merge Stock + Sentiment
+# ------------------------------
+st.subheader("📊 Stock Price vs Sentiment")
+
+# Create combined DataFrame
+combined = df_close.copy()
+combined["Sentiment"] = avg_sentiment
+
+st.write(combined.head())
+
+# Plot safely
+try:
+    st.line_chart(combined.set_index("Date")[["Close", "Sentiment"]])
+except Exception as e:
+    st.error(f"❌ Plotting error: {e}")
+    st.write("Available columns:", list(combined.columns))
+
+# ------------------------------
+# End
+# ------------------------------
+st.success("✅ Dashboard Ready!")
