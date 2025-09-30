@@ -71,7 +71,8 @@ headlines = [
     f"{ticker} stock downgraded by analysts due to market volatility"
 ]
 
-classifier = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+classifier = pipeline("sentiment-analysis", model="ProsusAI/finbert", framework="pt")
+
 
 sentiments = classifier(headlines)
 sentiment_df = pd.DataFrame(sentiments)
