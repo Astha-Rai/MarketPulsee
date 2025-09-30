@@ -72,7 +72,17 @@ headlines = [
 ]
 
 classifier = pipeline("sentiment-analysis", model="ProsusAI/finbert", framework="pt")
+try:
+    classifier = pipeline("sentiment-analysis", model="ProsusAI/finbert", framework="pt")
+except Exception as e:
+    st.error(f"❌ Could not load FinBERT model: {e}")
+    st.info("Using dummy sentiment scores instead.")
+    classifier = None
 
+if classifier:
+    sentiments = classifier(headlines)
+else:
+    sentiments = [{"label": "neutral", "score": 0.5} for _ in headlines]
 
 sentiments = classifier(headlines)
 sentiment_df = pd.DataFrame(sentiments)
